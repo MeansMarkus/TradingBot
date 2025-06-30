@@ -164,4 +164,34 @@ class Database:
     def get_today_pnl(self):
         """Get today's P&L"""
         today = datetime.now().date()
-        return self.get_daily_pnl(today) 
+        return self.get_daily_pnl(today)
+    
+    def get_account_balance(self):
+        """Get latest account balance"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT balance, equity, margin_used, free_margin 
+            FROM account_balance 
+            ORDER BY timestamp DESC 
+            LIMIT 1
+        ''')
+        result = cursor.fetchone()
+        conn.close()
+        
+        if result:
+            return {
+                'balance': result[0],
+                'equity': result[1],
+                'margin_used': result[2],
+                'free_margin': result[3]
+            }
+        else:
+            # Return default values for paper trading
+            return {
+                'balance': 10000,  # $10,000 paper balance
+                'equity': 10000,
+                'margin_used': 0,
+                'free_margin': 10000
+            } 
