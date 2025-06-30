@@ -5,6 +5,14 @@ from market_data import MarketData
 from risk_manager import RiskManager
 from database import Database
 
+# Import Alpaca API
+try:
+    import alpaca_trade_api as tradeapi
+    ALPACA_AVAILABLE = True
+except ImportError:
+    ALPACA_AVAILABLE = False
+    logging.warning("Alpaca API not available. Install with: pip install alpaca-trade-api")
+
 class TradingEngine:
     def __init__(self):
         self.market_data = MarketData()
@@ -12,6 +20,23 @@ class TradingEngine:
         self.db = Database()
         self.positions = {}
         self.orders = {}
+        self.alpaca_api = None
+        
+        if Config.EXCHANGE == 'alpaca' and ALPACA_AVAILABLE:
+            self.setup_alpaca()
+        
+    def setup_alpaca(self):
+        """Setup Alpaca API"""
+        try:
+            self.alpaca_api = tradeapi.REST(
+                key_id=Config.API_KEY,
+                secret_key=Config.SECRET_KEY,
+                base_url=Config.BASE_URL,
+                api_version='v2'
+            )
+            logging.info("Alpaca API initialized")
+        except Exception as e:
+            logging.error(f"Failed to setup Alpaca: {e}")
         
     def place_order(self, symbol, side, quantity, order_type='market', price=None, stop_loss=None, take_profit=None):
         """Place an order with risk management checks"""
@@ -29,13 +54,11 @@ class TradingEngine:
             if not can_trade:
                 return False, reason
             
-            # Place order on exchange
-            if Config.PAPER_TRADING:
-                # Simulate order placement for paper trading
-                order = self._simulate_order(symbol, side, quantity, order_type, price)
+            # Place order
+            if Config.EXCHANGE == 'alpaca' and self.alpaca_api:
+                order = self._place_alpaca_order(symbol, side, quantity, order_type, price)
             else:
-                # Real order placement
-                order = self._place_real_order(symbol, side, quantity, order_type, price)
+                order = self._place_ccxt_order(symbol, side, quantity, order_type, price)
             
             if order:
                 # Save trade to database
@@ -57,24 +80,46 @@ class TradingEngine:
             logging.error(f"Error placing order: {e}")
             return False, f"Order error: {e}"
     
-    def _simulate_order(self, symbol, side, quantity, order_type, price):
-        """Simulate order placement for paper trading"""
-        order_id = f"sim_{datetime.now().timestamp()}"
-        order = {
-            'id': order_id,
-            'symbol': symbol,
-            'side': side,
-            'quantity': quantity,
-            'price': price,
-            'type': order_type,
-            'status': 'filled',
-            'timestamp': datetime.now()
-        }
-        self.orders[order_id] = order
-        return order
+    def _place_alpaca_order(self, symbol, side, quantity, order_type, price):
+        """Place order on Alpaca"""
+        try:
+            if order_type == 'market':
+                order = self.alpaca_api.submit_order(
+                    symbol=symbol,
+                    qty=quantity,
+                    side=side,
+                    type='market',
+                    time_in_force='day'
+                )
+            elif order_type == 'limit':
+                order = self.alpaca_api.submit_order(
+                    symbol=symbol,
+                    qty=quantity,
+                    side=side,
+                    type='limit',
+                    time_in_force='day',
+                    limit_price=price
+                )
+            else:
+                raise ValueError(f"Unsupported order type: {order_type}")
+            
+            return {
+                'id': order.id,
+                'symbol': symbol,
+                'side': side,
+                'quantity': quantity,
+                'price': price,
+                'type': order_type,
+                'status': order.status,
+                'timestamp': datetime.now()
+            }
+            
+        except Exception as e:
+            logging.error(f"Error placing Alpaca order: {e}")
+            return None
     
-    def _place_real_order(self, symbol, side, quantity, order_type, price):
-        """Place real order on exchange"""
+    def _place_ccxt_order(self, symbol, side, quantity, order_type, price):
+        """Place order on CCXT exchange"""
         try:
             if order_type == 'market':
                 order = self.market_data.exchange.create_market_order(symbol, side, quantity)
@@ -85,23 +130,23 @@ class TradingEngine:
             
             return order
         except Exception as e:
-            logging.error(f"Error placing real order: {e}")
+            logging.error(f"Error placing CCXT order: {e}")
             return None
     
     def cancel_order(self, order_id):
         """Cancel an order"""
         try:
-            if Config.PAPER_TRADING:
+            if Config.EXCHANGE == 'alpaca' and self.alpaca_api:
+                result = self.alpaca_api.cancel_order(order_id)
+                logging.info(f"Order cancelled: {order_id}")
+                return True, result
+            else:
                 if order_id in self.orders:
                     self.orders[order_id]['status'] = 'cancelled'
                     logging.info(f"Order cancelled: {order_id}")
                     return True, "Order cancelled"
                 else:
                     return False, "Order not found"
-            else:
-                result = self.market_data.exchange.cancel_order(order_id)
-                logging.info(f"Order cancelled: {order_id}")
-                return True, result
         except Exception as e:
             logging.error(f"Error cancelling order: {e}")
             return False, f"Cancel error: {e}"
@@ -109,36 +154,93 @@ class TradingEngine:
     def close_position(self, symbol, side=None, quantity=None):
         """Close a position"""
         try:
-            if symbol not in self.positions:
-                return False, "No position found for symbol"
-            
-            position = self.positions[symbol]
-            if side is None:
-                side = 'sell' if position['side'] == 'buy' else 'buy'
-            if quantity is None:
-                quantity = position['quantity']
-            
-            # Place closing order
-            success, result = self.place_order(symbol, side, quantity)
-            
-            if success:
-                # Calculate P&L
-                pnl = self._calculate_pnl(position, result['price'], side)
-                
-                # Update risk manager
-                self.risk_manager.update_daily_loss(pnl)
-                
-                # Clear position
-                del self.positions[symbol]
-                
-                logging.info(f"Position closed: {symbol}, P&L: {pnl}")
-                return True, f"Position closed, P&L: {pnl}"
+            if Config.EXCHANGE == 'alpaca' and self.alpaca_api:
+                return self._close_alpaca_position(symbol, side, quantity)
             else:
-                return False, result
+                return self._close_ccxt_position(symbol, side, quantity)
                 
         except Exception as e:
             logging.error(f"Error closing position: {e}")
             return False, f"Close error: {e}"
+    
+    def _close_alpaca_position(self, symbol, side=None, quantity=None):
+        """Close position on Alpaca"""
+        try:
+            # Get current position
+            positions = self.alpaca_api.list_positions()
+            position = None
+            
+            for pos in positions:
+                if pos.symbol == symbol:
+                    position = pos
+                    break
+            
+            if not position:
+                return False, "No position found for symbol"
+            
+            # Determine side and quantity
+            if side is None:
+                side = 'sell' if float(position.qty) > 0 else 'buy'
+            if quantity is None:
+                quantity = abs(float(position.qty))
+            
+            # Place closing order
+            order = self.alpaca_api.submit_order(
+                symbol=symbol,
+                qty=quantity,
+                side=side,
+                type='market',
+                time_in_force='day'
+            )
+            
+            # Calculate P&L
+            entry_price = float(position.avg_entry_price)
+            current_price = float(position.current_price)
+            position_size = abs(float(position.qty))
+            
+            if float(position.qty) > 0:  # Long position
+                pnl = (current_price - entry_price) * position_size
+            else:  # Short position
+                pnl = (entry_price - current_price) * position_size
+            
+            # Update risk manager
+            self.risk_manager.update_daily_loss(pnl)
+            
+            logging.info(f"Position closed: {symbol}, P&L: ${pnl:.2f}")
+            return True, f"Position closed, P&L: ${pnl:.2f}"
+            
+        except Exception as e:
+            logging.error(f"Error closing Alpaca position: {e}")
+            return False, f"Close error: {e}"
+    
+    def _close_ccxt_position(self, symbol, side=None, quantity=None):
+        """Close position on CCXT exchange"""
+        if symbol not in self.positions:
+            return False, "No position found for symbol"
+        
+        position = self.positions[symbol]
+        if side is None:
+            side = 'sell' if position['side'] == 'buy' else 'buy'
+        if quantity is None:
+            quantity = position['quantity']
+        
+        # Place closing order
+        success, result = self.place_order(symbol, side, quantity)
+        
+        if success:
+            # Calculate P&L
+            pnl = self._calculate_pnl(position, result['price'], side)
+            
+            # Update risk manager
+            self.risk_manager.update_daily_loss(pnl)
+            
+            # Clear position
+            del self.positions[symbol]
+            
+            logging.info(f"Position closed: {symbol}, P&L: {pnl}")
+            return True, f"Position closed, P&L: {pnl}"
+        else:
+            return False, result
     
     def _update_position(self, symbol, side, quantity, price):
         """Update internal position tracking"""
@@ -200,22 +302,32 @@ class TradingEngine:
         if 'stop_loss' not in position or 'take_profit' not in position:
             return False, None
         
-        should_close, reason = self.risk_manager.should_close_position(
-            current_price, 
-            position['entry_price'], 
-            position['side'],
-            position['stop_loss'],
-            position['take_profit']
-        )
-        
-        if should_close:
-            return self.close_position(symbol)
+        if position['side'] == 'buy':
+            # Long position
+            if current_price <= position['stop_loss']:
+                return True, "Stop loss hit"
+            elif current_price >= position['take_profit']:
+                return True, "Take profit hit"
+        else:
+            # Short position
+            if current_price >= position['stop_loss']:
+                return True, "Stop loss hit"
+            elif current_price <= position['take_profit']:
+                return True, "Take profit hit"
         
         return False, None
     
     def get_positions(self):
         """Get current positions"""
-        return self.positions
+        if Config.EXCHANGE == 'alpaca' and self.alpaca_api:
+            try:
+                positions = self.alpaca_api.list_positions()
+                return {pos.symbol: pos for pos in positions}
+            except Exception as e:
+                logging.error(f"Error getting Alpaca positions: {e}")
+                return {}
+        else:
+            return self.positions
     
     def get_orders(self):
         """Get current orders"""
@@ -224,14 +336,23 @@ class TradingEngine:
     def get_account_summary(self):
         """Get account summary"""
         try:
-            balance = self.market_data.get_account_balance()
-            positions = self.market_data.get_positions()
-            
-            return {
-                'balance': balance,
-                'positions': positions,
-                'risk_metrics': self.risk_manager.get_risk_metrics()
-            }
+            if Config.EXCHANGE == 'alpaca' and self.alpaca_api:
+                account = self.alpaca_api.get_account()
+                return {
+                    'balance': float(account.equity),
+                    'cash': float(account.cash),
+                    'buying_power': float(account.buying_power),
+                    'portfolio_value': float(account.portfolio_value),
+                    'status': account.status
+                }
+            else:
+                return {
+                    'balance': 100000,  # Default for paper trading
+                    'cash': 100000,
+                    'buying_power': 100000,
+                    'portfolio_value': 100000,
+                    'status': 'ACTIVE'
+                }
         except Exception as e:
             logging.error(f"Error getting account summary: {e}")
             return None 
