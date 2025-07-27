@@ -10,19 +10,26 @@ from trading_bot import TradingBot
 from config import *
 from dotenv import load_dotenv
 import os
-import alpaca_trade_api as tradeapi
-from alpaca_trade_api.rest import TimeFrame
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
+from datetime import datetime, timedelta
 
 load_dotenv()
-api = tradeapi.REST(os.getenv('ALPACA_API_KEY'), os.getenv('ALPACA_SECRET_KEY'), 'https://paper-api.alpaca.markets', api_version='v2')
+client = StockHistoricalDataClient(
+    api_key=os.getenv('ALPACA_API_KEY'),
+    secret_key=os.getenv('ALPACA_SECRET_KEY')
+)
 
-try:
-    # Use get_bars for stocks (API v2)
-    bars = api.get_bars('SPY', TimeFrame.Minute, limit=5)
-    for bar in bars:
-        print(bar)
-except Exception as e:
-    print("Error:", e)
+request_params = StockBarsRequest(
+    symbol_or_symbols=["SPY"],
+    timeframe=TimeFrame.Minute,
+    start=datetime(2023, 7, 1),
+    end=datetime(2023, 7, 2)
+)
+
+bars = client.get_stock_bars(request_params)
+print(bars.df)
 
 def main():
     """Main function to run the trading bot"""

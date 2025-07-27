@@ -3,10 +3,21 @@ import pandas as pd
 import numpy as np
 import time
 from datetime import datetime, timedelta
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
+import os
+from dotenv import load_dotenv
+import sqlite3
 
 class TradingBot:
     def __init__(self, api_key, secret_key, paper=True):
         """Initialize the trading bot with Alpaca API"""
+        load_dotenv()
+        self.data_client = StockHistoricalDataClient(
+            api_key=os.getenv('ALPACA_API_KEY'),
+            secret_key=os.getenv('ALPACA_SECRET_KEY')
+        )
         base_url = 'https://paper-api.alpaca.markets' if paper else 'https://api.alpaca.markets'
         self.api = tradeapi.REST(api_key, secret_key, base_url, api_version='v2')
         
@@ -17,12 +28,32 @@ class TradingBot:
             print(f"Buying power: ${float(account.buying_power):,.2f}")
         except Exception as e:
             print(f"Connection failed: {e}")
+        
+        self.conn = sqlite3.connect('trades.db')
+        self._create_trades_table()
     
     def get_market_data(self, symbol, timeframe='1Day', limit=100):
-        """Get historical market data for a symbol"""
+        """Get historical market data for a symbol using the new Alpaca Data SDK"""
         try:
-            bars = self.api.get_bars(symbol, timeframe, limit=limit).df
-            return bars
+            end = datetime.now()
+            if timeframe.lower() == '1day':
+                tf = TimeFrame.Day
+                start = end - timedelta(days=limit + 5)
+            elif timeframe.lower() == '1min':
+                tf = TimeFrame.Minute
+                start = end - timedelta(minutes=limit + 5)
+            else:
+                tf = TimeFrame.Day
+                start = end - timedelta(days=limit + 5)
+
+            request_params = StockBarsRequest(
+                symbol_or_symbols=[symbol],
+                timeframe=tf,
+                start=start,
+                end=end
+            )
+            bars = self.data_client.get_stock_bars(request_params)
+            return bars.df
         except Exception as e:
             print(f"Error getting data for {symbol}: {e}")
             return None
@@ -51,6 +82,8 @@ class TradingBot:
                 time_in_force='day'
             )
             print(f"Order placed: {side} {qty} shares of {symbol}")
+            if order is not None:
+                self._log_trade(symbol, side, qty, order)
             return order
         except Exception as e:
             print(f"Order failed: {e}")
@@ -435,3 +468,30 @@ class TradingBot:
             except Exception as e:
                 print(f"❌ Error: {e}")
                 time.sleep(60)  # Wait 1 minute before retrying
+
+    def _create_trades_table(self):
+        with self.conn:
+            self.conn.execute('''
+                CREATE TABLE IF NOT EXISTS trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT,
+                    symbol TEXT,
+                    action TEXT,
+                    qty REAL,
+                    price REAL,
+                    order_id TEXT
+                )
+            ''')
+
+    def _log_trade(self, symbol, action, qty, order):
+        # Get the fill price if available, else use None
+        price = None
+        try:
+            price = float(order.filled_avg_price)
+        except Exception:
+            pass
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO trades (timestamp, symbol, action, qty, price, order_id) VALUES (?, ?, ?, ?, ?, ?)",
+                (datetime.now().isoformat(), symbol, action, qty, price, getattr(order, 'id', None))
+            )
