@@ -139,14 +139,14 @@ class TradingBot:
         else:
             print("No trading signal")
     
-    def enhanced_strategy(self, symbol, short_window=10, long_window=30):
+    def enhanced_strategy(self, symbol, short_window=5, long_window=15):
         """
-        Enhanced strategy with multiple technical indicators
-        - Moving Average Crossover
-        - RSI (Relative Strength Index)
-        - MACD (Moving Average Convergence Divergence)
-        - Volume confirmation
-        - Trend strength
+        Enhanced strategy with MORE LENIENT conditions for more frequent trading
+        - Shorter Moving Averages (5/15 instead of 10/30)
+        - More lenient RSI thresholds (40/60 instead of 30/70)
+        - Only need 1 signal instead of 2 to trigger trades
+        - Higher position size (15% instead of 10%)
+        - Relaxed trend strength filter
         """
         # Get historical data
         data = self.get_market_data(symbol, limit=long_window + 50)
@@ -154,31 +154,31 @@ class TradingBot:
             print(f"Not enough data for {symbol}")
             return
         
-        # Calculate moving averages
+        # Calculate moving averages (SHORTER PERIODS)
         data[f'MA_{short_window}'] = data['close'].rolling(window=short_window).mean()
         data[f'MA_{long_window}'] = data['close'].rolling(window=long_window).mean()
         
-        # Calculate RSI (14-period)
+        # Calculate RSI (shorter 10-period instead of 14)
         delta = data['close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        gain = (delta.where(delta > 0, 0)).rolling(window=10).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=10).mean()
         rs = gain / loss
         data['RSI'] = 100 - (100 / (1 + rs))
         
-        # Calculate MACD
-        data['EMA_12'] = data['close'].ewm(span=12).mean()
-        data['EMA_26'] = data['close'].ewm(span=26).mean()
-        data['MACD'] = data['EMA_12'] - data['EMA_26']
-        data['MACD_Signal'] = data['MACD'].ewm(span=9).mean()
+        # Calculate MACD (shorter periods)
+        data['EMA_8'] = data['close'].ewm(span=8).mean()
+        data['EMA_21'] = data['close'].ewm(span=21).mean()
+        data['MACD'] = data['EMA_8'] - data['EMA_21']
+        data['MACD_Signal'] = data['MACD'].ewm(span=6).mean()
         data['MACD_Histogram'] = data['MACD'] - data['MACD_Signal']
         
-        # Calculate volume moving average
-        data['Volume_MA'] = data['volume'].rolling(window=20).mean()
+        # Calculate volume moving average (shorter period)
+        data['Volume_MA'] = data['volume'].rolling(window=10).mean()
         data['Volume_Ratio'] = data['volume'] / data['Volume_MA']
         
-        # Calculate trend strength (ADX-like)
+        # Calculate trend strength (more lenient)
         data['Price_Change'] = data['close'].pct_change()
-        data['Trend_Strength'] = data['Price_Change'].rolling(window=14).std()
+        data['Trend_Strength'] = data['Price_Change'].rolling(window=10).std()
         
         # Get current values
         current_price = data['close'].iloc[-1]
@@ -196,7 +196,7 @@ class TradingBot:
         current_volume_ratio = data['Volume_Ratio'].iloc[-1]
         current_trend_strength = data['Trend_Strength'].iloc[-1]
         
-        print(f"\n{symbol} Enhanced Analysis:")
+        print(f"\n{symbol} LENIENT Enhanced Analysis:")
         print(f"Price: ${current_price:.2f}")
         print(f"Short MA ({short_window}): ${current_short_ma:.2f}")
         print(f"Long MA ({long_window}): ${current_long_ma:.2f}")
@@ -206,58 +206,75 @@ class TradingBot:
         print(f"Trend Strength: {current_trend_strength:.4f}")
         print(f"Current position: {current_position} shares")
         
-        # Enhanced trading logic
+        # MORE LENIENT trading logic
         buy_signals = 0
         sell_signals = 0
         
-        # 1. Moving Average Crossover
+        # 1. Moving Average Crossover (same logic, but faster signals due to shorter MAs)
         if prev_short_ma <= prev_long_ma and current_short_ma > current_long_ma:
             buy_signals += 1
+            print("   ✓ MA crossover BUY signal")
         elif prev_short_ma >= prev_long_ma and current_short_ma < current_long_ma:
             sell_signals += 1
+            print("   ✓ MA crossover SELL signal")
         
-        # 2. RSI conditions
-        if current_rsi < 30:  # Oversold
+        # 2. MORE LENIENT RSI conditions
+        if current_rsi < 40:  # Less oversold (was 30)
             buy_signals += 1
-        elif current_rsi > 70:  # Overbought
+            print("   ✓ RSI oversold BUY signal")
+        elif current_rsi > 60:  # Less overbought (was 70)
             sell_signals += 1
+            print("   ✓ RSI overbought SELL signal")
         
-        # 3. MACD conditions
+        # 3. MACD conditions (same logic, but faster due to shorter periods)
         if current_macd > current_macd_signal and data['MACD'].iloc[-2] <= data['MACD_Signal'].iloc[-2]:
             buy_signals += 1
+            print("   ✓ MACD bullish BUY signal")
         elif current_macd < current_macd_signal and data['MACD'].iloc[-2] >= data['MACD_Signal'].iloc[-2]:
             sell_signals += 1
+            print("   ✓ MACD bearish SELL signal")
         
-        # 4. Volume confirmation
-        if current_volume_ratio > 1.5:  # High volume
+        # 4. MORE LENIENT Volume confirmation
+        if current_volume_ratio > 1.2:  # Lower threshold (was 1.5)
             if buy_signals > sell_signals:
-                buy_signals += 1
+                buy_signals += 0.5  # Partial signal
+                print("   ✓ Volume confirms BUY")
             elif sell_signals > buy_signals:
-                sell_signals += 1
+                sell_signals += 0.5  # Partial signal
+                print("   ✓ Volume confirms SELL")
         
-        # 5. Trend strength filter
-        if current_trend_strength < 0.02:  # Low volatility - avoid trading
-            print("⚠️ Low volatility - skipping trade")
-            return
+        # 5. RELAXED Trend strength filter
+        if current_trend_strength < 0.01:  # Much more lenient (was 0.02)
+            print("⚠️ Very low volatility - but still trading")
+            # Don't return, just warn but continue
         
-        # Decision making
-        if buy_signals >= 2 and current_position == 0:
-            # Strong buy signal
+        # 6. Additional LENIENT signals
+        # Price momentum signal
+        if current_price > prev_short_ma * 1.005:  # Price 0.5% above short MA
+            buy_signals += 0.5
+            print("   ✓ Price momentum BUY signal")
+        elif current_price < prev_short_ma * 0.995:  # Price 0.5% below short MA
+            sell_signals += 0.5
+            print("   ✓ Price momentum SELL signal")
+        
+        # MORE AGGRESSIVE Decision making (only need 1 signal instead of 2)
+        if buy_signals >= 1 and current_position == 0:
+            # Buy signal with lower threshold
             account = self.api.get_account()
             buying_power = float(account.buying_power)
-            shares_to_buy = int(buying_power * 0.1 / current_price)
+            shares_to_buy = int(buying_power * 0.15 / current_price)  # Use 15% instead of 10%
             
             if shares_to_buy > 0:
-                print(f"📈 STRONG BUY SIGNAL ({buy_signals} indicators)!")
+                print(f"📈 LENIENT BUY SIGNAL ({buy_signals:.1f} score)!")
                 self.place_order(symbol, shares_to_buy, 'buy')
         
-        elif sell_signals >= 2 and current_position > 0:
-            # Strong sell signal
-            print(f"📉 STRONG SELL SIGNAL ({sell_signals} indicators)!")
+        elif sell_signals >= 1 and current_position > 0:
+            # Sell signal with lower threshold
+            print(f"📉 LENIENT SELL SIGNAL ({sell_signals:.1f} score)!")
             self.place_order(symbol, current_position, 'sell')
         
         else:
-            print(f"No strong signal (Buy: {buy_signals}, Sell: {sell_signals})")
+            print(f"Waiting for signal (Buy: {buy_signals:.1f}, Sell: {sell_signals:.1f})")
     
     def backtest_strategy(self, symbol, start_date=None, end_date=None):
         """
@@ -283,48 +300,48 @@ class TradingBot:
             trades = []
             equity_curve = []
             
-            # Calculate indicators
-            bars['MA_10'] = bars['close'].rolling(window=10).mean()
-            bars['MA_30'] = bars['close'].rolling(window=30).mean()
+            # Calculate indicators with NEW LENIENT PARAMETERS
+            bars['MA_5'] = bars['close'].rolling(window=5).mean()
+            bars['MA_15'] = bars['close'].rolling(window=15).mean()
             
-            # RSI
+            # RSI (10-period instead of 14)
             delta = bars['close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            gain = (delta.where(delta > 0, 0)).rolling(window=10).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=10).mean()
             rs = gain / loss
             bars['RSI'] = 100 - (100 / (1 + rs))
             
-            # MACD
-            bars['EMA_12'] = bars['close'].ewm(span=12).mean()
-            bars['EMA_26'] = bars['close'].ewm(span=26).mean()
-            bars['MACD'] = bars['EMA_12'] - bars['EMA_26']
-            bars['MACD_Signal'] = bars['MACD'].ewm(span=9).mean()
+            # MACD (shorter periods)
+            bars['EMA_8'] = bars['close'].ewm(span=8).mean()
+            bars['EMA_21'] = bars['close'].ewm(span=21).mean()
+            bars['MACD'] = bars['EMA_8'] - bars['EMA_21']
+            bars['MACD_Signal'] = bars['MACD'].ewm(span=6).mean()
             
-            # Volume
-            bars['Volume_MA'] = bars['volume'].rolling(window=20).mean()
+            # Volume (shorter period)
+            bars['Volume_MA'] = bars['volume'].rolling(window=10).mean()
             bars['Volume_Ratio'] = bars['volume'] / bars['Volume_MA']
             
             # Simulate trading
-            for i in range(30, len(bars)):
+            for i in range(20, len(bars)):
                 current_price = bars['close'].iloc[i]
                 current_date = bars.index[i]
                 
-                # Calculate signals
+                # Calculate signals with LENIENT thresholds
                 buy_signals = 0
                 sell_signals = 0
                 
-                # MA Crossover
-                if (bars['MA_10'].iloc[i-1] <= bars['MA_30'].iloc[i-1] and 
-                    bars['MA_10'].iloc[i] > bars['MA_30'].iloc[i]):
+                # MA Crossover (5/15 instead of 10/30)
+                if (bars['MA_5'].iloc[i-1] <= bars['MA_15'].iloc[i-1] and 
+                    bars['MA_5'].iloc[i] > bars['MA_15'].iloc[i]):
                     buy_signals += 1
-                elif (bars['MA_10'].iloc[i-1] >= bars['MA_30'].iloc[i-1] and 
-                      bars['MA_10'].iloc[i] < bars['MA_30'].iloc[i]):
+                elif (bars['MA_5'].iloc[i-1] >= bars['MA_15'].iloc[i-1] and 
+                      bars['MA_5'].iloc[i] < bars['MA_15'].iloc[i]):
                     sell_signals += 1
                 
-                # RSI
-                if bars['RSI'].iloc[i] < 30:
+                # LENIENT RSI (40/60 instead of 30/70)
+                if bars['RSI'].iloc[i] < 40:
                     buy_signals += 1
-                elif bars['RSI'].iloc[i] > 70:
+                elif bars['RSI'].iloc[i] > 60:
                     sell_signals += 1
                 
                 # MACD
@@ -335,16 +352,22 @@ class TradingBot:
                       bars['MACD'].iloc[i-1] >= bars['MACD_Signal'].iloc[i-1]):
                     sell_signals += 1
                 
-                # Volume confirmation
-                if bars['Volume_Ratio'].iloc[i] > 1.5:
+                # LENIENT Volume confirmation (1.2 instead of 1.5)
+                if bars['Volume_Ratio'].iloc[i] > 1.2:
                     if buy_signals > sell_signals:
-                        buy_signals += 1
+                        buy_signals += 0.5
                     elif sell_signals > buy_signals:
-                        sell_signals += 1
+                        sell_signals += 0.5
                 
-                # Execute trades
-                if buy_signals >= 2 and position == 0:
-                    shares = int(cash * 0.1 / current_price)
+                # Price momentum
+                if current_price > bars['MA_5'].iloc[i-1] * 1.005:
+                    buy_signals += 0.5
+                elif current_price < bars['MA_5'].iloc[i-1] * 0.995:
+                    sell_signals += 0.5
+                
+                # Execute trades (ONLY NEED 1 SIGNAL instead of 2)
+                if buy_signals >= 1 and position == 0:
+                    shares = int(cash * 0.15 / current_price)  # Use 15% instead of 10%
                     if shares > 0:
                         position = shares
                         cash -= shares * current_price
@@ -356,7 +379,7 @@ class TradingBot:
                             'signals': buy_signals
                         })
                 
-                elif sell_signals >= 2 and position > 0:
+                elif sell_signals >= 1 and position > 0:
                     cash += position * current_price
                     trades.append({
                         'date': current_date,
@@ -377,9 +400,9 @@ class TradingBot:
             
             # Results
             total_return = ((final_equity - 10000) / 10000) * 100
-            buy_hold_return = ((final_price - bars['close'].iloc[30]) / bars['close'].iloc[30]) * 100
+            buy_hold_return = ((final_price - bars['close'].iloc[20]) / bars['close'].iloc[20]) * 100
             
-            print(f"\n📊 Backtest Results:")
+            print(f"\n📊 LENIENT Backtest Results:")
             print(f"Starting Capital: $10,000")
             print(f"Final Equity: ${final_equity:,.2f}")
             print(f"Total Return: {total_return:.2f}%")
@@ -388,8 +411,9 @@ class TradingBot:
             
             if len(trades) > 0:
                 winning_trades = [t for t in trades if t['action'] == 'SELL']
-                win_rate = len(winning_trades) / len([t for t in trades if t['action'] == 'BUY']) * 100
-                print(f"Win Rate: {win_rate:.1f}%")
+                if len([t for t in trades if t['action'] == 'BUY']) > 0:
+                    win_rate = len(winning_trades) / len([t for t in trades if t['action'] == 'BUY']) * 100
+                    print(f"Win Rate: {win_rate:.1f}%")
             
             return {
                 'total_return': total_return,
@@ -435,12 +459,12 @@ class TradingBot:
             print(f"🎯 TAKE-PROFIT triggered at ${current_price:.2f}")
             self.place_order(symbol, current_position, 'sell')
     
-    def run_strategy(self, symbols=['SPY'], check_interval=300):
+    def run_strategy(self, symbols=['SPY'], check_interval=120):
         """
         Run the trading strategy continuously
-        check_interval: seconds between checks (300 = 5 minutes)
+        check_interval: seconds between checks (120 = 2 minute)
         """
-        print("🤖 Trading bot started!")
+        print("🤖 LENIENT Trading bot started!")
         print(f"Monitoring: {symbols}")
         print(f"Check interval: {check_interval} seconds\n")
         
@@ -450,7 +474,7 @@ class TradingBot:
                     print(f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Market is open")
                     
                     for symbol in symbols:
-                        # Use enhanced strategy for better accuracy
+                        # Use enhanced strategy with lenient conditions
                         self.enhanced_strategy(symbol)
                         # Apply risk management
                         self.risk_management(symbol)
