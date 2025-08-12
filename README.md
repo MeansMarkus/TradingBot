@@ -1,4 +1,5 @@
-# Trading Bot
+# Trading Bot Created by Markus Means
+IF you choose to use this outside of paper trading, i am not responsible for money lost or gained.
 
 A simple algorithmic trading bot using the Alpaca API with a momentum strategy based on moving average crossovers.
 
@@ -94,4 +95,5 @@ The bot uses a simple momentum strategy:
 - `config.py` - Configuration settings
 - `run_bot.py` - Bot runner script
 - `env_example.txt` - Example environment file
-- `README.md` - This file 
+- `README.md` - This file
+  
